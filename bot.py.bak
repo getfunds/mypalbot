@@ -1,0 +1,457 @@
+import asyncio
+import websockets
+import json
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import os
+from dotenv import load_dotenv
+import aiohttp
+
+load_dotenv()
+
+user_watchlists = {}
+active_monitoring = set()  
+trader_watchlists = {}
+active_trader_monitoring = set()
+
+def get_monitoring_buttons(user_id: int) -> list:
+    dev_button = InlineKeyboardButton(
+        "✅ Dev Monitoring Active" if user_id in active_monitoring 
+        else "👀🔍 Start Dev Monitoring", 
+        callback_data="watch_dev"
+    )
+    trader_button = InlineKeyboardButton(
+        "✅ Trader Monitoring Active" if user_id in active_trader_monitoring 
+        else "👀👥 Start Trader Monitoring", 
+        callback_data="watch_trader"
+    )
+    return [[dev_button]], [[trader_button]]  
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_watchlists[user_id] = set()
+    trader_watchlists[user_id] = set()
+    
+    dev_button, trader_button = get_monitoring_buttons(user_id)
+    keyboard = [
+        [
+            InlineKeyboardButton("🔍 Dev Tracking", callback_data="dev_tracking"),
+            InlineKeyboardButton("👥 Trader Tracking", callback_data="trader_tracking")
+        ],
+        [*dev_button[0], *trader_button[0]],  # Combine monitoring buttons into one row
+        [InlineKeyboardButton("📋 My Watchlists", callback_data="show_watchlists")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = (
+        "👋 Welcome to MyPal, the fastest and simplest bot for trading on Solana based on real-time monitored data.\n\n"
+        "Please explore our features by choosing an option below:"
+    )
+    
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    
+    if query.data == "dev_tracking":
+        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="start")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text(
+            "Please enter the developer's address you want to track.\n"
+            "Simply reply to this message with the address.",
+            reply_markup=reply_markup
+        )
+        context.user_data['expecting_address'] = True
+    
+    elif query.data == "trader_tracking":
+        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="start")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text(
+            "Please enter the trader's wallet address you want to track.\n"
+            "Simply reply to this message with the address.",
+            reply_markup=reply_markup
+        )
+        context.user_data['expecting_trader_address'] = True
+    
+    elif query.data == "show_watchlists":
+        dev_list = "\n".join(f"• {addr}" for addr in user_watchlists.get(user_id, set())) or "Empty"
+        trader_list = "\n".join(f"• {addr}" for addr in trader_watchlists.get(user_id, set())) or "Empty"
+        
+        message = (
+            "📋 Your Watchlists:\n\n"
+            "🔍 Dev Watchlist:\n"
+            f"{dev_list}\n\n"
+            "👥 Trader Watchlist:\n"
+            f"{trader_list}"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("❌ Remove Address", callback_data="remove_address")],
+            [InlineKeyboardButton("🏠 Back to Home", callback_data="start")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text(message, reply_markup=reply_markup)
+    
+    elif query.data == "start":
+        
+        dev_button, trader_button = get_monitoring_buttons(user_id)
+        keyboard = [
+            [
+                InlineKeyboardButton("🔍 Dev Tracking", callback_data="dev_tracking"),
+                InlineKeyboardButton("👥 Trader Tracking", callback_data="trader_tracking")
+            ],
+            [*dev_button[0], *trader_button[0]],  # Combine monitoring buttons into one row
+            [InlineKeyboardButton("📋 My Watchlists", callback_data="show_watchlists")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        welcome_text = (
+            "👋 Welcome to MyPal, the fastest and simplest bot for trading on Solana based on real-time monitored data.\n\n"
+        "Please explore our features by choosing an option below:"
+        )
+        
+        
+        await query.message.delete()
+        await query.message.reply_text(welcome_text, reply_markup=reply_markup)
+    
+    elif query.data == "list_addresses":
+        if user_id not in user_watchlists or not user_watchlists[user_id]:
+            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="start")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.message.reply_text(
+                "Your watchlist is empty",
+                reply_markup=reply_markup
+            )
+            return
+        
+        addresses = "\n".join(f"• {addr}" for addr in user_watchlists[user_id])
+        keyboard = [
+            [InlineKeyboardButton("❌ Remove Address", callback_data="remove_address")],
+            [InlineKeyboardButton("🏠 Back to Home", callback_data="start")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text(
+            f"Your watchlist:\n\n{addresses}",
+            reply_markup=reply_markup
+        )
+    
+    elif query.data == "remove_address":
+        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="start")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text(
+            "Please enter the address you want to remove from your watchlist.\n"
+            "Simply reply to this message with the address.",
+            reply_markup=reply_markup
+        )
+        context.user_data['expecting_remove_address'] = True
+    
+    elif query.data == "watch_dev":
+        if user_id not in user_watchlists or not user_watchlists[user_id]:
+            await query.message.reply_text("Please add developer addresses to your watchlist first!")
+            return
+        
+        if user_id in active_monitoring:  
+            active_monitoring.discard(user_id)
+            await query.message.reply_text("❌ Developer monitoring stopped.")
+        else:  
+            active_monitoring.add(user_id)
+            await query.message.reply_text("✅ Developer monitoring started!")
+            asyncio.create_task(subscribe_new_tokens(user_id, context))
+        
+        
+        dev_button, trader_button = get_monitoring_buttons(user_id)
+        keyboard = [
+            [
+                InlineKeyboardButton("🔍 Dev Tracking", callback_data="dev_tracking"),
+                InlineKeyboardButton("👥 Trader Tracking", callback_data="trader_tracking")
+            ],
+            [*dev_button[0], *trader_button[0]],  
+            [InlineKeyboardButton("📋 My Watchlists", callback_data="show_watchlists")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_reply_markup(reply_markup=reply_markup)
+
+    elif query.data == "watch_trader":
+        if user_id not in trader_watchlists or not trader_watchlists[user_id]:
+            await query.message.reply_text("Please add trader addresses to your watchlist first!")
+            return
+        
+        if user_id in active_trader_monitoring:  
+            active_trader_monitoring.discard(user_id)
+            await query.message.reply_text("❌ Trader monitoring stopped.")
+        else:  
+            active_trader_monitoring.add(user_id)
+            await query.message.reply_text("✅ Trader monitoring started!")
+            asyncio.create_task(subscribe_trader_activity(user_id, context))
+        
+        
+        dev_button, trader_button = get_monitoring_buttons(user_id)
+        keyboard = [
+            [
+                InlineKeyboardButton("🔍 Dev Tracking", callback_data="dev_tracking"),
+                InlineKeyboardButton("👥 Trader Tracking", callback_data="trader_tracking")
+            ],
+            [*dev_button[0], *trader_button[0]],  # Combine monitoring buttons into one row
+            [InlineKeyboardButton("📋 My Watchlists", callback_data="show_watchlists")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_reply_markup(reply_markup=reply_markup)
+
+async def handle_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not (context.user_data.get('expecting_address') or 
+            context.user_data.get('expecting_remove_address') or
+            context.user_data.get('expecting_trader_address')):
+        return
+    
+    user_id = update.effective_user.id
+    address = update.message.text.strip()
+    
+    if context.user_data.get('expecting_address'):
+        if user_id not in user_watchlists:
+            user_watchlists[user_id] = set()
+        
+        user_watchlists[user_id].add(address)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🏠 Home", callback_data="start"),
+                InlineKeyboardButton("➕ Add Another", callback_data="dev_tracking")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ Address {address} has been added to your watchlist!",
+            reply_markup=reply_markup
+        )
+        context.user_data['expecting_address'] = False
+    
+    elif context.user_data.get('expecting_remove_address'):
+        if user_id in user_watchlists and address in user_watchlists[user_id]:
+            user_watchlists[user_id].remove(address)
+            message = f"✅ Address {address} has been removed from your watchlist!"
+        else:
+            message = "❌ Address not found in your watchlist!"
+        
+        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="start")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(message, reply_markup=reply_markup)
+        context.user_data['expecting_remove_address'] = False
+    
+    elif context.user_data.get('expecting_trader_address'):
+        if user_id not in trader_watchlists:
+            trader_watchlists[user_id] = set()
+        
+        trader_watchlists[user_id].add(address)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🏠 Home", callback_data="start"),
+                InlineKeyboardButton("➕ Add Another", callback_data="trader_tracking")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ Trader address {address} has been added to your watchlist!",
+            reply_markup=reply_markup
+        )
+        context.user_data['expecting_trader_address'] = False
+
+async def add_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Please provide an address to add")
+        return
+    
+    address = context.args[0]
+    if user_id not in user_watchlists:
+        user_watchlists[user_id] = set()
+    
+    user_watchlists[user_id].add(address)
+    await update.message.reply_text(f"Address {address} added to your watchlist")
+
+async def remove_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Please provide an address to remove")
+        return
+    
+    address = context.args[0]
+    if user_id in user_watchlists and address in user_watchlists[user_id]:
+        user_watchlists[user_id].remove(address)
+        await update.message.reply_text(f"Address {address} removed from your watchlist")
+    else:
+        await update.message.reply_text("Address not found in your watchlist")
+
+async def list_addresses(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in user_watchlists or not user_watchlists[user_id]:
+        await update.message.reply_text("Your watchlist is empty")
+        return
+    
+    addresses = "\n".join(user_watchlists[user_id])
+    await update.message.reply_text(f"Your watchlist:\n{addresses}")
+
+async def subscribe_new_tokens(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    uri = "wss://pumpportal.fun/api/data"
+    
+    while user_id in active_monitoring:  # Continue only while monitoring is active
+        try:
+            async with websockets.connect(uri) as websocket:
+                payload = {
+                    "method": "subscribeNewToken"
+                }
+                
+                await websocket.send(json.dumps(payload))
+                
+                while user_id in active_monitoring:  # Check monitoring status in inner loop
+                    try:
+                        message = await websocket.recv()
+                        token_data = json.loads(message)
+                        
+                        # Check against current watchlist (not cached version)
+                        if token_data.get('traderPublicKey') in user_watchlists[user_id]:
+                            metadata = {}
+                            image_url = None
+                            if token_data.get('uri'):
+                                async with aiohttp.ClientSession() as session:
+                                    async with session.get(token_data['uri']) as response:
+                                        if response.status == 200:
+                                            metadata = await response.json()
+                                            if 'image' in metadata:
+                                                image_url = metadata['image']
+                            
+                            formatted_message = (
+                                f"<u>Token Info:</u>\n\n"
+                                f"<b>{token_data['name']}</b>\n"
+                            )
+
+                            if metadata.get('description'):
+                                formatted_message += f"{metadata['description']}\n\n"
+
+                            formatted_message += (
+                                f"Token Address: {token_data['mint']}\n"
+                                f"Ticker: {token_data['symbol']}\n"
+                                f"Dev Buy: {token_data['solAmount']} SOL\n"
+                                f"Dev Address: {token_data['traderPublicKey']}\n\n"
+                            )
+
+                            social_links = []
+                            if metadata.get('twitter'):
+                                social_links.append(f"<a href='{metadata['twitter']}'>X/Twitter</a>")
+                            if metadata.get('website'):
+                                social_links.append(f"<a href='{metadata['website']}'>Website</a>")
+                            if metadata.get('telegram'):
+                                social_links.append(f"<a href='{metadata['telegram']}'>Telegram</a>")
+
+                            if social_links:
+                                formatted_message += f"{' | '.join(social_links)}\n\n"
+
+                            formatted_message += (
+                                f"<a href='https://pump.fun/coin/{token_data['mint']}'>Pump.fun</a> | "
+                                f"<a href='https://solscan.io/tx/{token_data['signature']}'>Mint TX</a>"
+                            )
+                            await context.bot.send_photo(
+                                chat_id=user_id,
+                                photo=image_url,
+                                caption=formatted_message,
+                                parse_mode='HTML'
+                            )
+                    except json.JSONDecodeError:
+                        continue
+                    except Exception as e:
+                        print(f"Error processing token: {e}")
+                        continue
+                    
+        except websockets.exceptions.ConnectionClosed:
+            if user_id in active_monitoring:  
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="Connection closed unexpectedly. Reconnecting..."
+                )
+                await asyncio.sleep(5)  
+        except Exception as e:
+            if user_id in active_monitoring:  
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"An error occurred: {e}"
+                )
+                await asyncio.sleep(5)  
+
+async def subscribe_trader_activity(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    uri = "wss://pumpportal.fun/api/data"
+    
+    while user_id in active_trader_monitoring:
+        try:
+            async with websockets.connect(uri) as websocket:
+                payload = {
+                    "method": "subscribeAccountTrade",
+                    "keys": list(trader_watchlists[user_id])
+                }
+                await websocket.send(json.dumps(payload))
+                
+                while user_id in active_trader_monitoring:
+                    try:
+                        message = await websocket.recv()
+                        trade_data = json.loads(message)
+                        
+                        
+                        formatted_message = (
+                            f"<u>Trader {trade_data.get('txType', 'Unknown')}</u>\n\n"
+                            f"Trader Address: {trade_data.get['traderPublicKey']}\n\n"
+                            f"Sol Amount: {trade_data.get('solAmount', 'Unknown')} SOL\n"
+                            f"Token Address: {trade_data.get('mint', 'Unknown')}\n\n"
+                            f"<a href='https://solscan.io/tx/{trade_data.get('signature', '')}'>Tx Hash</a>"
+                        )
+                        
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=formatted_message,
+                            parse_mode='HTML'
+                        )
+                        
+                    except json.JSONDecodeError:
+                        continue
+                    except Exception as e:
+                        print(f"Error processing trade: {e}")
+                        continue
+        except websockets.exceptions.ConnectionClosed:
+            if user_id in active_trader_monitoring:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="Connection closed unexpectedly. Reconnecting..."
+                )
+                await asyncio.sleep(5)
+        except Exception as e:
+            if user_id in active_trader_monitoring:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"An error occurred: {e}"
+                )
+                await asyncio.sleep(5)
+
+def main():
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    if not bot_token:
+        raise ValueError("Please set the TELEGRAM_BOT_TOKEN environment variable")
+
+    application = Application.builder().token(bot_token).build()
+    
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_address))
+    
+    
+    application.add_handler(CommandHandler("add_address", add_address))
+    application.add_handler(CommandHandler("remove_address", remove_address))
+    application.add_handler(CommandHandler("list_addresses", list_addresses))
+
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
