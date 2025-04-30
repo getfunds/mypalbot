@@ -95,3 +95,11 @@ bot/
 - aiohttp
 - python-dotenv
 
+## Resources
+(MyPal Documentation)[https://mypal.gitbook.io/]
+
+## Demo
+
+Telegram : @mypaldotfun_bot
+(link)[https://t.me/mypaldotfun_bot]
+
