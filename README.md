@@ -1,61 +1,97 @@
-# Solana Trading Bot
+# MyPal - Solana Trading Monitor Bot
 
-This is a Telegram bot for tracking and monitoring trading activity on Solana blockchain, with a focus on new token deployments and developer activity.
+MyPal is a Telegram bot for tracking and monitoring trading activity on the Solana blockchain. It provides real-time notifications about developer activities, token launches, and trader movements, helping users stay ahead of the curve in the fast-paced Solana ecosystem.
 
 ## Features
 
-- Monitor specific developer addresses for new token creations
-- Monitor trader wallet activity 
-- Track specific token/fee payer combinations for real-time trade information
-- Vybe Network API integration for detailed trade data
-- Pump.fun integration for new token tracking
-- Telegram interface with interactive buttons and commands
+- Track specific traders' wallet activities to monitor their trades in real-time
+- Get notifications when tracked traders buy or sell tokens
+- Monitor specific token/trader combinations for targeted insights
+- Monitor developer wallets for new token deployments on Pump.fun with metadata display
+- Track specific developer addresses for real-time trade information on it's deployed token 
+- Access comprehensive trade data including price, amounts, and market IDs
+- Access Vybe Network's real-time data with detailed information
+
+## Bot Commands
+
+- `/start` - Start the bot and display the main menu
+- `/home` - Return to the main menu at any time
+- `/add_address <address>` - Add a developer address to your watchlist
+- `/remove_address <address>` - Remove an address from your watchlist
+- `/list_addresses` - List addresses in your watchlist
+
+## Interactive Features
+
+The bot provides a user-friendly interface with inline buttons for:
+- Starting/stopping developer monitoring
+- Starting/stopping trader monitoring
+- Managing developer wallet tracking
+- Managing trader wallet tracking
+- Tracking specific trader/token pairs
+- Accessing detailed trade information
 
 ## Project Structure
 
-The project is organized in a modular structure for better maintainability:
-
 ```
-mybot/
-├── __init__.py
-├── config.py               # Global state and configuration
-├── main.py                 # Bot initialization
-├── handlers/               # Telegram message handlers
-│   ├── __init__.py
-│   ├── callback_handlers.py # Inline button handlers
-│   ├── command_handlers.py  # Command handlers
-│   └── message_handlers.py  # Text message handlers
-├── services/               # API integration services
-│   ├── __init__.py
-│   ├── pump_service.py     # Pump.fun API integration
-│   └── vybe_service.py     # Vybe Network API integration
-└── utils/                  # Utility functions
-    ├── __init__.py
-    └── message_utils.py    # Message formatting utilities
+bot/
+├── bot.py                  # Main entry point with command registrations
+├── handlers.py             # Command and callback handlers
+├── monitoring.py           # Monitoring functions for blockchain activity
+├── state.py                # Global state variables and data structures
+├── websocket_handlers.py   # WebSocket connection management
+└── requirements.txt        # Dependencies
 ```
 
-## Setup
+## Technical Implementation
 
-1. Install the required dependencies:
+- **WebSocket Integration**: Real-time connections to Vybe Network and pump.fun
+- **Multi-threading**: Separate threads for WebSocket connections to ensure reliability
+- **Error Handling**: Comprehensive error handling with reconnection logic
+- **Data Management**: In-memory data structures to manage user watchlists
+- **Telegram API**: Utilizes PTB (Python Telegram Bot) for rich message formatting
+
+## Setup Instructions
+
+1. Clone the repository:
+   ```
+   git clone <repository-url>
+   cd bot
+   ```
+
+2. Install dependencies:
    ```
    pip install -r requirements.txt
    ```
 
-2. Create a `.env` file with your API keys:
+3. Create a `.env` file with your API keys:
    ```
    TELEGRAM_BOT_TOKEN=your_telegram_bot_token
    API_KEY=your_vybe_network_api_key
    WS_URL=wss://api.vybenetwork.xyz/live
    ```
 
-3. Run the bot:
+4. Run the bot:
    ```
-   python run.py
+   python bot.py
    ```
 
-## Commands
+## Usage Guide
 
-- `/start` - Start the bot and display the main menu
-- `/add_address <address>` - Add a developer address to your watchlist
-- `/remove_address <address>` - Remove an address from your watchlist
-- `/list_addresses` - List addresses in your watchlist 
+1. Start the bot with `/start` or `/home` to access the main menu
+2. Select "Dev Tracking" to monitor developer activities:
+   - Enter developer wallet addresses to track
+   - Click "Start Dev Monitoring" to begin receiving notifications
+3. Select "Trader Tracking" to monitor trader activities:
+   - Choose "Track All Trades" to monitor all activities of a trader
+   - Choose "Track Specific Token" to monitor specific trader/token pairs
+   - Click "Start Trader Monitoring" to begin receiving notifications
+4. View and manage your watchlists through the "My Watchlists" option
+
+## Dependencies
+
+- python-telegram-bot
+- websocket-client
+- websockets
+- aiohttp
+- python-dotenv
+
