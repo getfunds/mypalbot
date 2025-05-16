@@ -235,10 +235,12 @@ async def subscribe_new_tokens(user_id: int, context):
                      )
                  await asyncio.sleep(5)
 
-async def subscribe_trader_activity(user_id: int, context):
+async def subscribe_trader_activity(user_id: int, context, specific_trader=None):
     """
     Monitor trading activity for addresses in the trader watchlist using Vybe Network WebSocket.
     Similar to subscribe_vybe_trades but without token mint filtering.
+    
+    If specific_trader is provided, only monitor that trader's activity.
     """
     api_key = os.getenv('API_KEY')
     websocket_uri = os.getenv('WS_URL', "wss://api.vybenetwork.xyz/live")
@@ -247,7 +249,7 @@ async def subscribe_trader_activity(user_id: int, context):
         print("API_KEY or WS_URL missing in .env")
         return
 
-    print(f"Setting up Vybe WebSocket for trader monitoring for user {user_id}")
+    print(f"Setting up Vybe WebSocket for trader monitoring for user {user_id}{' for specific trader: ' + specific_trader if specific_trader else ''}")
 
     # Get the current event loop *before* starting the thread
     main_loop = asyncio.get_running_loop()
@@ -259,10 +261,34 @@ async def subscribe_trader_activity(user_id: int, context):
             custom_headers = {"X-API-Key": api_key} # Format for websocket-client
 
             # Create WebSocketApp instance
+            if specific_trader:
+                # For a specific trader, we need a custom on_open function
+                def on_open_specific_trader(ws):
+                    print(f"Trader WebSocket Connection Opened for specific trader: {specific_trader}")
+                    try:
+                        config_message = {
+                            "type": "configure",
+                            "filters": {
+                                "trades": [{
+                                    "feePayer": specific_trader
+                                }]
+                            }
+                        }
+                        ws.send(json.dumps(config_message))
+                        print(f"Specific trader configuration message sent: {json.dumps(config_message)}")
+                    except Exception as e:
+                        print(f"Error sending specific trader config message: {e}")
+                
+                on_open_func = on_open_specific_trader
+            else:
+                # Use the standard on_open_trader function for all traders
+                on_open_func = lambda ws: on_open_trader(ws, user_id)
+
+            # Create WebSocketApp instance
             ws_app = websocket.WebSocketApp(
                 websocket_uri,
                 header=custom_headers,
-                on_open=lambda ws: on_open_trader(ws, user_id),
+                on_open=on_open_func,
                 on_message=lambda ws, msg: on_message_trader(ws, msg, user_id, context, main_loop),
                 on_error=on_error,
                 on_close=on_close
@@ -274,7 +300,13 @@ async def subscribe_trader_activity(user_id: int, context):
             ws_thread.start()
 
             # Keep the async task alive while the thread is running and user is monitoring
+            # If monitoring a specific trader, also check if that trader is still in the watchlist
             while user_id in active_trader_monitoring and ws_thread.is_alive():
+                if specific_trader and user_id in trader_watchlists and specific_trader not in trader_watchlists[user_id]:
+                    print(f"Trader {specific_trader} was removed from watchlist, stopping specific monitoring")
+                    if ws_app:
+                        ws_app.close()
+                    break
                 await asyncio.sleep(1) # Check every second
 
             # If loop exits, either user stopped monitoring or thread died
@@ -303,6 +335,11 @@ async def subscribe_trader_activity(user_id: int, context):
 
         # Wait before restarting the loop (if applicable)
         if user_id in active_trader_monitoring:
+            # Check if the dev is still in dev_trade_watchlist if applicable
+            if specific_trader and specific_trader not in trader_watchlists.get(user_id, set()):
+                print(f"Trader {specific_trader} no longer in user's trader watchlist, stopping monitoring")
+                break
+            
             print("Waiting 5 seconds before restarting Vybe WebSocket connection attempt...")
             await asyncio.sleep(5)
         else:
