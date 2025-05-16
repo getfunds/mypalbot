@@ -50,23 +50,30 @@ async def show_home_page(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
     
     welcome_text = (
         "👋 Welcome to MyPal, The fastest and simplest bot for tracking trader and developer wallets on Solana, using real-time monitoring data to remain ahead of the curve.\n\n"
-        "Explore our wallet tracking features below. If you don't have a wallet to track, you can choose from <a href='https://vybe.fyi/wallets/top-traders'>this list of top traders</a>:"
+        "Explore our wallet tracking features below. If you don't have a wallet to track, you can choose from <a href='https://vybe.fyi/wallets/top-traders'>this list of top traders</a>"
     )
     
     if is_query:
         # If coming from a callback query, delete the previous message and send a new one
         await update.callback_query.message.delete()
-        await update.callback_query.message.reply_text(welcome_text, reply_markup=reply_markup)
+        await update.callback_query.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='HTML')
     else:
         # If coming from a command, just reply to the message
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='HTML')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_watchlists[user_id] = set()
-    trader_watchlists[user_id] = set()
+    
+    # Initialize all watchlists if they don't exist
+    if user_id not in user_watchlists:
+        user_watchlists[user_id] = set()
+    
+    if user_id not in trader_watchlists:
+        trader_watchlists[user_id] = set()
+        
     if user_id not in dev_trade_watchlists:
         dev_trade_watchlists[user_id] = set()
+        
     if user_id not in trader_token_watchlists:
         trader_token_watchlists[user_id] = {}
     
@@ -146,7 +153,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🏠 Back to Home", callback_data="start")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text(message, reply_markup=reply_markup)
+        await query.message.reply_text(message, reply_markup=reply_markup, parse_mode='HTML')
     
     elif query.data == "start":
         await show_home_page(update, context, is_query=True)
@@ -312,17 +319,34 @@ async def handle_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"✅ Address {address} has been added to your watchlist!",
+            f"✅ Address {address} has been added to your dev watchlist!",
             reply_markup=reply_markup
         )
         context.user_data['expecting_address'] = False
     
     elif expecting_remove:
+        removed_from_dev = False
+        removed_from_trader = False
+        
+        # Try to remove from both watchlists
         if user_id in user_watchlists and address in user_watchlists[user_id]:
             user_watchlists[user_id].remove(address)
-            message = f"✅ Address {address} has been removed from your watchlist!"
+            removed_from_dev = True
+            
+        if user_id in trader_watchlists and address in trader_watchlists[user_id]:
+            trader_watchlists[user_id].remove(address)
+            removed_from_trader = True
+            
+        if removed_from_dev or removed_from_trader:
+            watchlist_type = ""
+            if removed_from_dev:
+                watchlist_type = "dev watchlist"
+            if removed_from_trader:
+                watchlist_type = "trader watchlist" if not removed_from_dev else "dev and trader watchlists"
+                
+            message = f"✅ Address {address} has been removed from your {watchlist_type}!"
         else:
-            message = "❌ Address not found in your watchlist!"
+            message = "❌ Address not found in your watchlists!"
         
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -336,6 +360,13 @@ async def handle_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         trader_watchlists[user_id].add(address)
         
+        # If trader monitoring is already active, start monitoring this new address immediately
+        if user_id in active_trader_monitoring:
+            asyncio.create_task(subscribe_trader_activity(user_id, context, specific_trader=address))
+            monitoring_status = "✅ Trader address added and monitoring started automatically!"
+        else:
+            monitoring_status = "✅ Trader address added to your trader watchlist!"
+            
         keyboard = [
             [
                 InlineKeyboardButton("🏠 Home", callback_data="start"),
@@ -345,8 +376,10 @@ async def handle_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"✅ Trader address {address} has been added to your watchlist!",
-            reply_markup=reply_markup
+            f"{monitoring_status}\n"
+            f"Trader: `{address}`",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
         )
         context.user_data['expecting_trader_address'] = False
     
@@ -382,6 +415,13 @@ async def handle_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Store the trader-token pair
         trader_token_watchlists[user_id][trader_address] = token_address
         
+        # If trader monitoring is already active, start monitoring this new trader-token pair immediately
+        if user_id in active_trader_monitoring:
+            asyncio.create_task(subscribe_trader_token_activity(user_id, trader_address, token_address, context))
+            monitoring_status = "✅ Trader-token pair added and monitoring started automatically!"
+        else:
+            monitoring_status = "✅ Trader-token pair added to your watchlist!"
+        
         keyboard = [
             [
                 InlineKeyboardButton("🏠 Home", callback_data="start"),
@@ -391,7 +431,7 @@ async def handle_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"✅ Added trader-token pair to your watchlist!\n\n"
+            f"{monitoring_status}\n\n"
             f"Trader: `{trader_address}`\n"
             f"Token: `{token_address}`",
             reply_markup=reply_markup,
